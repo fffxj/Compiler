@@ -42,28 +42,23 @@ extern YYSTYPE cool_yylval;
 /*
  *  Add Your own definitions here
  */
-int comment_depth;
+int comment_depth; /* indicate the depth of block comment */
 
 %}
 
 /*
  * Define names for regular expressions here.
  */
-COMMENTD        --
-COMMENTL        "(*"
-COMMENTR        "*)"
-
-DQ              \"
+WHITESPACE      [ \n\f\r\t\v]
 DD              --
 LC              \(\*
 RC              \*\)
-WHITESPACE      [ \n\f\r\t\v]
-
+DQ              \"
 DARROW          =>
 LE              <=
 ASSIGN          <-
 SYMBOL          [-+*/=<.~,;:(){}@]
-
+               
 CLASS           [cC][lL][aA][sS][sS]
 ELSE            [eE][lL][sS][eE]
 FI              [fF][iI]
@@ -81,73 +76,52 @@ ESAC            [eE][sS][aA][cC]
 NEW             [nN][eE][wW]
 OF              [oO][fF]
 NOT             [nN][oO][tT]
-
 TRUE            t[rR][uU][eE]
 FALSE           f[aA][lL][sS][eE]
-INT_CONST       [0-9]+
-STR_CONST       \".*\"
 
+INTEGER         [0-9]+
 TYPEID          [A-Z][a-zA-Z0-9_]*
 OBJECTID        [a-z][a-zA-Z0-9_]*
 
-%x LINE_COMMENT BLOCK_COMMENT
 %x COMMENT STRING
-%x NULL_IN_STRING STRING_TOO_LONG
+%x NULL_IN_STRING
                                    
 %%
 
  /*
-  *  Nested and single line comments
+  *  Single line and nested block comments.
   */
-{DD}.*                  ;
+{DD}.* ;                /* eat up single line comment */
 
-{COMMENTL}              { comment_depth = 1; BEGIN(BLOCK_COMMENT); }
+{LC} {                  /* block comment start */
+    comment_depth = 1;
+    BEGIN(COMMENT);
+}
 
-<BLOCK_COMMENT>[^(*)\n]*  ;
-<BLOCK_COMMENT>\([^(*\n]* ;
-<BLOCK_COMMENT>\*[^(*)\n]* ;
-<BLOCK_COMMENT>\)[^(*\n]*  ;
-
-<BLOCK_COMMENT>\(\*     { comment_depth++; }
-<BLOCK_COMMENT>\*\)     {
+<COMMENT>[^(*)\n]* ;
+<COMMENT>\([^(*\n]* ;
+<COMMENT>\*[^(*)\n]* ;
+<COMMENT>\)[^(*\n]* ;
+<COMMENT>{LC}           { comment_depth++; }
+<COMMENT>{RC} {
     if (comment_depth == 1)
         BEGIN(INITIAL);
     comment_depth--;
 }
+<COMMENT>\n             { curr_lineno++; }
+<COMMENT><<EOF>> {
+    BEGIN(INITIAL);
+    cool_yylval.error_msg = "EOF in comment";
+    return (ERROR);
+}
 
-<BLOCK_COMMENT>\n       { curr_lineno++; }
-<BLOCK_COMMENT><<EOF>>  {
-    cool_yylval.error_msg = "EOF in comment";
-    BEGIN(INITIAL);
-    return (ERROR);
-}
-<INITIAL>\*\)                    {
+<INITIAL>\*\) {
     cool_yylval.error_msg = "Unmatched *)";
     return (ERROR);
 }
+
  /*
-<BLOCK_COMMENT>[^(*)\n]*  ;
-<BLOCK_COMMENT>\([^*\n]* ;
-<BLOCK_COMMENT>\*[^(\n]* ;
-<BLOCK_COMMENT>\(\*     { comment_depth++; }
-<BLOCK_COMMENT>\n       { curr_lineno++; }
-<BLOCK_COMMENT>\*\)     {
-    if (comment_depth == 1)
-        BEGIN(INITIAL);
-    comment_depth--;
-}
-<BLOCK_COMMENT><<EOF>>  {
-    cool_yylval.error_msg = "EOF in comment";
-    BEGIN(INITIAL);
-    return (ERROR);
-}
-<INITIAL>\*\)                    {
-    cool_yylval.error_msg = "Unmatched *)";
-    return (ERROR);
-}
- */
- /*
-  *  The multiple-character operators.
+  *  The multiple-char and single-char symbols/operators.
   */
 {DARROW}		{ return (DARROW); }
 {LE}                    { return (LE); }
@@ -176,9 +150,6 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
 {OF}                    { return (OF); }
 {NOT}                   { return (NOT); }
 
- /*
-  * Booleans and integers
-  */
 {TRUE} {
     cool_yylval.boolean = 1;
     return (BOOL_CONST);
@@ -187,7 +158,11 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
     cool_yylval.boolean = 0;
     return (BOOL_CONST);
 }
-{INT_CONST} {
+
+ /*
+  * Integer constants.
+  */
+{INTEGER} {
     cool_yylval.symbol = inttable.add_string(yytext);
     return (INT_CONST);
 }
@@ -198,12 +173,12 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
   *  \n \t \b \f, the result is c.
   *
   */
-\" {
+{DQ} {                  /* string start */
     string_buf_ptr = string_buf;
     BEGIN(STRING);
 }
 
-<STRING>\" {
+<STRING>{DQ} {
     BEGIN(INITIAL);
     *string_buf_ptr = '\0';
     if (string_buf_ptr >= string_buf + MAX_STR_CONST) {
@@ -234,8 +209,6 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
     cool_yylval.error_msg = "String contains null character";
     return (ERROR);
 }
-
-<STRING>\\\\ *string_buf_ptr++ = '\\';
 <STRING>\\n  *string_buf_ptr++ = '\n';
 <STRING>\\t  *string_buf_ptr++ = '\t';
 <STRING>\\b  *string_buf_ptr++ = '\b';
@@ -253,68 +226,9 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
     if (strlen(yytext) <= MAX_STR_CONST - strlen(string_buf)) {
         strcpy(string_buf_ptr, yytext);
     }
-    /* string_buf_ptr may be out of string_buf[].
-     * use this to check whether string is too long.
-     */
+    /* use string_buf_ptr to check whether string is too long. */
     string_buf_ptr += strlen(yytext);
 }
-
- /*
-{DQ} {
-    string_buf_ptr = string_buf;
-    BEGIN(STRING);
-}
-
-<STRING>{DQ} {
-    BEGIN(INITIAL);
-    *string_buf_ptr = '\0';
-    cool_yylval.symbol = stringtable.add_string(string_buf);
-    return (STR_CONST);
-}
-<STRING>\n {
-    BEGIN(INITIAL);
-    cool_yylval.error_msg = "Unterminated string constant";
-    return (ERROR);
-}
-
-<STRING><<EOF>> {
-    BEGIN(INITIAL);
-    cool_yylval.error_msg = "EOF in string constant";
-    return (ERROR);
-}
-<STRING>\\ {
-    *string_buf_ptr++ = *yytext;
-}
-<STRING>\0|\\\0 {
-    BEGIN(NULL_IN_STRING);
-    cool_yylval.error_msg = "String contains null character";
-    return (ERROR);
-}
-
-<NULL_IN_STRING>.*\n {
-    BEGIN(INITIAL);
-}
-<NULL_IN_STRING>(.|\n)*{DQ} {
-    BEGIN(INITIAL);
-}
-
-<STRING>\\\n ;
-<STRING>\\n  *string_buf_ptr++ = '\n';
-<STRING>\\t  *string_buf_ptr++ = '\t';
-<STRING>\\b  *string_buf_ptr++ = '\b';
-<STRING>\\f  *string_buf_ptr++ = '\f';
-<STRING>\\(.|\n)  *string_buf_ptr++ = yytext[1];
-
-<STRING>[^\\\n\0\"]+	{
-    char *yptr = yytext;
-    if (strlen(string_buf) + strlen(yytext) >= MAX_STR_CONST) {
-        cool_yylval.error_msg = "String constant too long";
-        return (ERROR);
-    }
-    while ( *yptr )
-        *string_buf_ptr++ = *yptr++;
-}
- */
  
  /*
   * Type and object identifiers.
@@ -329,15 +243,13 @@ OBJECTID        [a-z][a-zA-Z0-9_]*
 }
 
  /* 
-  * Single characters
+  * Other single characters
   */
-\n {
-   curr_lineno++;
-}
+\n                      { curr_lineno++; }
 
 {WHITESPACE} ;
 
-. {    /*  invalid character */
+. {                     /* invalid character */
     cool_yylval.error_msg = yytext;
     return (ERROR);
 }
