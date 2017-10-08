@@ -135,39 +135,244 @@
     %type <class_> class
     
     /* You will want to change the following line. */
-    %type <features> dummy_feature_list
-    
+    %type <features> feature_list nonempty_feature_list
+    %type <feature> feature
+    %type <formals> formal_list nonempty_formal_list
+    %type <formal> formal
+    %type <expressions> dispatch_expr_list nonempty_dispatch_expr_list
+    %type <expressions> block_expr_list nonempty_block_expr_list
+    %type <expression> expr
+    %type <expression> let_expr_tail
+    %type <cases> case_list nonempty_case_list
+    %type <case_> case
+
     /* Precedence declarations go here. */
-    
+    %right ASSIGN
+    %nonassoc NOT
+    %nonassoc LE '<' '='
+    %left '+' '-'
+    %left '*' '/'
+    %nonassoc ISVOID
+    %nonassoc '~'
+    %left '@'
+    %left '.'
     
     %%
-    /* 
-    Save the root of the abstract syntax tree in a global variable.
-    */
+    /*
+     * Program
+     */
+    /* Save the root of the abstract syntax tree in a global variable. */
     program	: class_list	{ @$ = @1; ast_root = program($1); }
     ;
-    
+
+    /*
+     * Class_ and Classes
+     */
     class_list
     : class			/* single class */
     { $$ = single_Classes($1);
-    parse_results = $$; }
-    | class_list class	/* several classes */
-    { $$ = append_Classes($1,single_Classes($2)); 
-    parse_results = $$; }
+      parse_results = $$; }
+    | class_list class	        /* several classes */
+    { $$ = append_Classes($1, single_Classes($2));
+      parse_results = $$; }
     ;
-    
-    /* If no parent is specified, the class inherits from the Object class. */
-    class	: CLASS TYPEID '{' dummy_feature_list '}' ';'
-    { $$ = class_($2,idtable.add_string("Object"),$4,
-    stringtable.add_string(curr_filename)); }
-    | CLASS TYPEID INHERITS TYPEID '{' dummy_feature_list '}' ';'
-    { $$ = class_($2,$4,$6,stringtable.add_string(curr_filename)); }
+
+    class
+    : CLASS TYPEID '{' feature_list '}' ';'
+    { $$ = class_($2, idtable.add_string("Object"), $4,
+                  stringtable.add_string(curr_filename)); }
+    | CLASS TYPEID INHERITS TYPEID '{' feature_list '}' ';'
+    { $$ = class_($2, $4, $6, stringtable.add_string(curr_filename)); }
+    | error
     ;
-    
-    /* Feature list may be empty, but no empty features in list. */
-    dummy_feature_list:		/* empty */
-    {  $$ = nil_Features(); }
-    
+
+    /*
+     * Feature and Features
+     */
+    feature_list
+    : /* empty */
+    { $$ = nil_Features(); }
+    | nonempty_feature_list
+    { $$ = $1; }
+    ;
+
+    nonempty_feature_list
+    : feature ';'
+    { $$ = single_Features($1); }
+    | feature ';' nonempty_feature_list
+    { $$ = append_Features(single_Features($1), $3); }
+    ;
+
+    feature
+    : OBJECTID '(' formal_list ')' ':' TYPEID '{' expr '}'
+    { $$ = method($1, $3, $6, $8); }
+    | OBJECTID ':' TYPEID
+    { $$ = attr($1, $3, no_expr()); }
+    | OBJECTID ':' TYPEID ASSIGN expr
+    { $$ = attr($1, $3, $5); }
+    | error
+    ;
+
+    /*
+     * Formal and Formals
+     */
+    formal_list
+    : /* empty */
+    { $$ = nil_Formals(); }
+    | nonempty_formal_list
+    { $$ = $1; }
+    ;
+
+    nonempty_formal_list
+    : formal
+    { $$ = single_Formals($1); }
+    | formal ',' nonempty_formal_list
+    { $$ = append_Formals(single_Formals($1), $3); }
+    ;
+
+    formal
+    : OBJECTID ':' TYPEID
+    { $$ = formal($1, $3); }
+    ;
+
+    /*
+     * Expression and Expressions
+     */
+    dispatch_expr_list
+    : /* empty */
+    { $$ = nil_Expressions(); }
+    | nonempty_dispatch_expr_list
+    { $$ = $1; }
+    ;
+
+    nonempty_dispatch_expr_list
+    : expr
+    { $$ = single_Expressions($1); }
+    | expr ',' nonempty_dispatch_expr_list
+    { $$ = append_Expressions(single_Expressions($1), $3); }
+    ;
+
+    block_expr_list
+    : nonempty_block_expr_list
+    { $$ = $1; }
+    ;
+
+    nonempty_block_expr_list
+    : expr ';'
+    { $$ = single_Expressions($1); }
+    | expr ';' nonempty_block_expr_list
+    { $$ = append_Expressions(single_Expressions($1), $3); }
+    | error ';' nonempty_block_expr_list
+    ;
+
+    let_expr_tail
+    : OBJECTID ':' TYPEID IN expr
+    { $$ = let($1, $3, no_expr(), $5);}
+    | OBJECTID ':' TYPEID ASSIGN expr IN expr
+    { $$ = let($1, $3, $5, $7);}
+    | OBJECTID ':' TYPEID ',' let_expr_tail
+    { $$ = let($1, $3, no_expr(), $5); }
+    | OBJECTID ':' TYPEID ASSIGN expr ',' let_expr_tail
+    { $$ = let($1, $3, $5, $7); }
+    | error let_expr_tail
+    ;
+
+    expr
+    /* assign */
+    : OBJECTID ASSIGN expr
+    { $$ = assign($1, $3); }
+    /* static dispatch */
+    | expr '@' TYPEID '.' OBJECTID '(' dispatch_expr_list ')'
+    { $$ = static_dispatch($1, $3, $5, $7); }
+    /* dispatch */
+    | expr '.' OBJECTID '(' dispatch_expr_list ')'
+    { $$ = dispatch($1, $3, $5); }    
+    | OBJECTID '(' dispatch_expr_list ')'
+    { $$ = dispatch(object(idtable.add_string("self")), $1, $3); }
+    /* cond */
+    | IF expr THEN expr ELSE expr FI
+    { $$ = cond($2, $4, $6); }
+    /* loop */
+    | WHILE expr LOOP expr POOL
+    { $$ = loop($2, $4); }
+    /* block */
+    | '{' block_expr_list '}'
+    { $$ = block($2); }
+    /* let */
+    | LET let_expr_tail
+    { $$ = $2;  }
+    /* typcase */
+    | CASE expr OF case_list ESAC
+    { $$ = typcase($2, $4); }
+    /* new_ */
+    | NEW TYPEID
+    { $$ = new_($2); }
+    /* isvoid */
+    | ISVOID expr
+    { $$ = isvoid($2); }
+    /* plus */
+    | expr '+' expr
+    { $$ = plus($1, $3); }
+    /* sub */
+    | expr '-' expr
+    { $$ = sub($1, $3); }
+    /* mul */
+    | expr '*' expr
+    { $$ = mul($1, $3); }
+    /* divide */
+    | expr '/' expr
+    { $$ = divide($1, $3); }
+    /* neg */
+    | '~' expr
+    { $$ = neg($2); }
+    /* lt */
+    | expr '<' expr
+    { $$ = lt($1, $3); }
+    /* eq */
+    | expr '=' expr
+    { $$ = eq($1, $3); }
+    /* leq */
+    | expr LE expr
+    { $$ = leq($1, $3); }
+    /* comp */
+    | NOT expr
+    { $$ = comp($2); }
+    /* ( ) */
+    | '(' expr ')'
+    { $$ = $2; }
+    /* object */
+    | OBJECTID
+    { $$ = object($1); }
+    /* int_const */
+    | INT_CONST
+    { $$ = int_const($1); }
+    /* string_const */
+    | STR_CONST
+    { $$ = string_const($1); }
+    /* bool_const */
+    | BOOL_CONST
+    { $$ = bool_const($1); }
+    ;
+
+    /*
+     * Case_ and Cases
+     */
+    case_list
+    : nonempty_case_list
+    { $$ = $1; }
+    ;
+
+    nonempty_case_list
+    : case ';'
+    { $$ = single_Cases($1); }
+    | case ';' nonempty_case_list
+    { $$ = append_Cases(single_Cases($1), $3); }
+    ;
+
+    case
+    : OBJECTID ':' TYPEID DARROW expr
+    { $$ = branch($1, $3, $5); }
+    ;
     
     /* end of grammar */
     %%
@@ -185,5 +390,3 @@
       
       if(omerrs>50) {fprintf(stdout, "More than 50 errors\n"); exit(1);}
     }
-    
-    
